@@ -2,7 +2,6 @@ import requests
 import time
 import pandas as pd
 
-# ===== AYARLAR =====
 TELEGRAM_TOKEN = "8806457521:AAEhKaB0a5dHTG-yecCwlivpewlPLMlAsTE"
 CHAT_ID = "8478214929"
 CHECK_EVERY = 60
@@ -13,7 +12,6 @@ COINS = [
     "KASUSDT", "AAVEUSDT", "ENAUSDT", "ETHUSDT", "SUIUSDT"
 ]
 
-# Aktif pozisyonlar: {symbol: {yon, giris, sl, tp1, tp2, tp1_hit}}
 active_positions = {}
 last_signal = {}
 
@@ -49,10 +47,8 @@ def get_candles(symbol):
             return None
         cols = ["ts", "open", "high", "low", "close", "vol", "volCcy", "volCcyQuote"][:len(rows[0])]
         df = pd.DataFrame(rows, columns=cols)
-        df["close"] = df["close"].astype(float)
-        df["high"] = df["high"].astype(float)
-        df["low"] = df["low"].astype(float)
-        df["vol"] = df["vol"].astype(float)
+        for c in ["open", "close", "high", "low", "vol"]:
+            df[c] = df[c].astype(float)
         df = df.iloc[::-1].reset_index(drop=True)
         return df
     except Exception as e:
@@ -72,9 +68,7 @@ def rsi(series, period=7):
     return 100 - (100 / (1 + rs))
 
 def atr(df, period=14):
-    high = df["high"]
-    low = df["low"]
-    close = df["close"]
+    high, low, close = df["high"], df["low"], df["close"]
     tr = pd.concat([
         high - low,
         (high - close.shift()).abs(),
@@ -85,11 +79,21 @@ def atr(df, period=14):
 def pct(giris, hedef):
     return round(abs(hedef - giris) / giris * 100, 2)
 
+def sinyal_gucu(skor):
+    if skor >= 5:
+        return "🔥 ÇOK GÜÇLÜ"
+    elif skor == 4:
+        return "💪 GÜÇLÜ"
+    elif skor == 3:
+        return "👍 ORTA"
+    else:
+        return "⚠️ ZAYIF"
+
 def check_signal(symbol, df):
     if df is None or len(df) < 30:
         return None
-    close = df["close"]
-    vol = df["vol"]
+    close, vol = df["close"], df["vol"]
+    open_ = df["open"]
     e9 = ema(close, 9)
     e26 = ema(close, 26)
     r = rsi(close, 7)
@@ -98,12 +102,45 @@ def check_signal(symbol, df):
     i = len(df) - 2
     price = close.iloc[i]
     a = atr14.iloc[i]
-    long_ok = e9.iloc[i] > e26.iloc[i] and price > e9.iloc[i] and r.iloc[i] > 50 and vol.iloc[i] > vol_ma.iloc[i]
-    short_ok = e9.iloc[i] < e26.iloc[i] and price < e9.iloc[i] and r.iloc[i] < 50 and vol.iloc[i] > vol_ma.iloc[i]
-    if long_ok:
-        return ("LONG", price, round(price - a*1.5, 6), round(price + a*1.5, 6), round(price + a*3.0, 6), round(r.iloc[i], 1))
-    if short_ok:
-        return ("SHORT", price, round(price + a*1.5, 6), round(price - a*1.5, 6), round(price - a*3.0, 6), round(r.iloc[i], 1))
+    vol_oran = round(vol.iloc[i] / vol_ma.iloc[i], 1)
+    ema_mesafe = round(abs(price - e26.iloc[i]) / price * 100, 2)
+    atr_pct = round(a / price * 100, 2)
+
+    # Son 3 mumun rengi
+    son3 = ["🟢" if close.iloc[i-k] > open_.iloc[i-k] else "🔴" for k in range(3)]
+    mumlar = " ".join(son3)
+
+    long_kosullar = [
+        e9.iloc[i] > e26.iloc[i],
+        price > e9.iloc[i],
+        r.iloc[i] > 50,
+        vol.iloc[i] > vol_ma.iloc[i],
+        vol_oran > 1.5,
+        close.iloc[i] > close.iloc[i-1],  # son mum yeşil
+    ]
+    short_kosullar = [
+        e9.iloc[i] < e26.iloc[i],
+        price < e9.iloc[i],
+        r.iloc[i] < 50,
+        vol.iloc[i] > vol_ma.iloc[i],
+        vol_oran > 1.5,
+        close.iloc[i] < close.iloc[i-1],  # son mum kırmızı
+    ]
+
+    extra = {
+        "rsi": round(r.iloc[i], 1),
+        "vol_oran": vol_oran,
+        "ema_mesafe": ema_mesafe,
+        "atr_pct": atr_pct,
+        "mumlar": mumlar,
+    }
+
+    if all(long_kosullar[:4]):
+        skor = sum(long_kosullar)
+        return ("LONG", price, round(price - a*1.5, 6), round(price + a*1.5, 6), round(price + a*3.0, 6), extra, skor)
+    if all(short_kosullar[:4]):
+        skor = sum(short_kosullar)
+        return ("SHORT", price, round(price + a*1.5, 6), round(price - a*1.5, 6), round(price - a*3.0, 6), extra, skor)
     return None
 
 def check_positions():
@@ -112,62 +149,27 @@ def check_positions():
         price = get_price(symbol)
         if not price:
             continue
-        yon = pos["yon"]
-        giris = pos["giris"]
-        sl = pos["sl"]
-        tp1 = pos["tp1"]
-        tp2 = pos["tp2"]
+        yon, giris, sl, tp1, tp2 = pos["yon"], pos["giris"], pos["sl"], pos["tp1"], pos["tp2"]
 
         if yon == "LONG":
             if not pos["tp1_hit"] and price >= tp1:
                 pos["tp1_hit"] = True
-                send_telegram(
-                    f"🎯 <b>TP1 HIT!</b>\n"
-                    f"📌 {symbol} · LONG\n"
-                    f"💰 Giriş: {giris}\n"
-                    f"✅ TP1: {tp1} · <b>%{pct(giris, tp1)} kar</b> 📈"
-                )
+                send_telegram(f"🎯 <b>TP1 HIT!</b>\n📌 {symbol} · LONG\n💰 Giriş: {giris}\n✅ TP1: {tp1} · <b>%{pct(giris,tp1)} kar</b> 📈")
             elif price >= tp2:
-                send_telegram(
-                    f"🏆 <b>TP2 HIT!</b>\n"
-                    f"📌 {symbol} · LONG\n"
-                    f"💰 Giriş: {giris}\n"
-                    f"✅ TP2: {tp2} · <b>%{pct(giris, tp2)} kar</b> 🚀"
-                )
+                send_telegram(f"🏆 <b>TP2 HIT!</b>\n📌 {symbol} · LONG\n💰 Giriş: {giris}\n✅ TP2: {tp2} · <b>%{pct(giris,tp2)} kar</b> 🚀")
                 closed.append(symbol)
             elif price <= sl:
-                send_telegram(
-                    f"🛑 <b>STOP HIT</b>\n"
-                    f"📌 {symbol} · LONG\n"
-                    f"💰 Giriş: {giris}\n"
-                    f"❌ SL: {sl} · <b>%{pct(giris, sl)} zarar</b>"
-                )
+                send_telegram(f"🛑 <b>STOP HIT</b>\n📌 {symbol} · LONG\n💰 Giriş: {giris}\n❌ SL: {sl} · <b>%{pct(giris,sl)} zarar</b>")
                 closed.append(symbol)
-
         elif yon == "SHORT":
             if not pos["tp1_hit"] and price <= tp1:
                 pos["tp1_hit"] = True
-                send_telegram(
-                    f"🎯 <b>TP1 HIT!</b>\n"
-                    f"📌 {symbol} · SHORT\n"
-                    f"💰 Giriş: {giris}\n"
-                    f"✅ TP1: {tp1} · <b>%{pct(giris, tp1)} kar</b> 📈"
-                )
+                send_telegram(f"🎯 <b>TP1 HIT!</b>\n📌 {symbol} · SHORT\n💰 Giriş: {giris}\n✅ TP1: {tp1} · <b>%{pct(giris,tp1)} kar</b> 📈")
             elif price <= tp2:
-                send_telegram(
-                    f"🏆 <b>TP2 HIT!</b>\n"
-                    f"📌 {symbol} · SHORT\n"
-                    f"💰 Giriş: {giris}\n"
-                    f"✅ TP2: {tp2} · <b>%{pct(giris, tp2)} kar</b> 🚀"
-                )
+                send_telegram(f"🏆 <b>TP2 HIT!</b>\n📌 {symbol} · SHORT\n💰 Giriş: {giris}\n✅ TP2: {tp2} · <b>%{pct(giris,tp2)} kar</b> 🚀")
                 closed.append(symbol)
             elif price >= sl:
-                send_telegram(
-                    f"🛑 <b>STOP HIT</b>\n"
-                    f"📌 {symbol} · SHORT\n"
-                    f"💰 Giriş: {giris}\n"
-                    f"❌ SL: {sl} · <b>%{pct(giris, sl)} zarar</b>"
-                )
+                send_telegram(f"🛑 <b>STOP HIT</b>\n📌 {symbol} · SHORT\n💰 Giriş: {giris}\n❌ SL: {sl} · <b>%{pct(giris,sl)} zarar</b>")
                 closed.append(symbol)
 
     for s in closed:
@@ -179,17 +181,16 @@ def main():
 
     while True:
         try:
-            # Aktif pozisyonları kontrol et
             check_positions()
-
-            # Yeni sinyal ara
             for symbol in COINS:
                 if symbol in active_positions:
-                    continue  # zaten açık pozisyon var
+                    continue
                 df = get_candles(symbol)
                 signal = check_signal(symbol, df)
                 if signal:
-                    yon, price, sl, tp1, tp2, r = signal
+                    yon, price, sl, tp1, tp2, ex, skor = signal
+                    if skor < 5:  # sadece çok güçlü sinyaller
+                        continue
                     key = f"{symbol}_{yon}"
                     if last_signal.get(key) == round(price, 6):
                         continue
@@ -197,21 +198,27 @@ def main():
                     emoji = "🟢" if yon == "LONG" else "🔴"
                     msg = (
                         f"{emoji} <b>{yon} SİNYALİ</b>\n"
-                        f"📌 Coin: <b>{symbol}</b>\n"
-                        f"💰 Giriş: {price}\n"
-                        f"🛑 SL: {sl} · %{pct(price, sl)}\n"
-                        f"🎯 TP1: {tp1} · %{pct(price, tp1)}\n"
-                        f"🎯 TP2: {tp2} · %{pct(price, tp2)}\n"
-                        f"📊 RSI: {r}"
+                        f"━━━━━━━━━━━━━━\n"
+                        f"📌 <b>{symbol}</b>\n"
+                        f"💰 Giriş: <b>{price}</b>\n"
+                        f"🛑 SL: {sl} · %{pct(price,sl)}\n"
+                        f"🎯 TP1: {tp1} · %{pct(price,tp1)}\n"
+                        f"🏆 TP2: {tp2} · %{pct(price,tp2)}\n"
+                        f"━━━━━━━━━━━━━━\n"
+                        f"📊 RSI: {ex['rsi']}\n"
+                        f"📈 Hacim: {ex['vol_oran']}x ortalama\n"
+                        f"📏 EMA uzaklığı: %{ex['ema_mesafe']}\n"
+                        f"💥 Volatilite: %{ex['atr_pct']}\n"
+                        f"🕯 Son mumlar: {ex['mumlar']}\n"
+                        f"⚡ Güç: {sinyal_gucu(skor)}"
                     )
                     send_telegram(msg)
                     active_positions[symbol] = {
                         "yon": yon, "giris": price,
                         "sl": sl, "tp1": tp1, "tp2": tp2, "tp1_hit": False
                     }
-                    print(f"Sinyal: {symbol} {yon} @ {price}")
+                    print(f"Sinyal: {symbol} {yon} @ {price} | Güç: {skor}")
                 time.sleep(1)
-
         except Exception as e:
             print(f"Hata: {e}")
 
