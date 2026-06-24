@@ -196,21 +196,16 @@ def main():
                         continue
                     last_signal[key] = round(price, 6)
                     emoji = "🟢" if yon == "LONG" else "🔴"
+                    tag = symbol.replace("USDT", "")
                     msg = (
-                        f"{emoji} <b>{yon} SİNYALİ</b>\n"
+                        f"{emoji} <b>{yon} · #{tag}</b>\n"
                         f"━━━━━━━━━━━━━━\n"
-                        f"📌 <b>{symbol}</b>\n"
-                        f"💰 Giriş: <b>{price}</b>\n"
-                        f"🛑 SL: {sl} · %{pct(price,sl)}\n"
-                        f"🎯 TP1: {tp1} · %{pct(price,tp1)}\n"
-                        f"🏆 TP2: {tp2} · %{pct(price,tp2)}\n"
+                        f"📍 Seviye: <code>{price}</code>\n"
+                        f"🛑 SL: <code>{sl}</code>\n"
+                        f"🎯 TP1: <code>{tp1}</code>\n"
+                        f"🏆 TP2: <code>{tp2}</code>\n"
                         f"━━━━━━━━━━━━━━\n"
-                        f"📊 RSI: {ex['rsi']}\n"
-                        f"📈 Hacim: {ex['vol_oran']}x ortalama\n"
-                        f"📏 EMA uzaklığı: %{ex['ema_mesafe']}\n"
-                        f"💥 Volatilite: %{ex['atr_pct']}\n"
-                        f"🕯 Son mumlar: {ex['mumlar']}\n"
-                        f"⚡ Güç: {sinyal_gucu(skor)}"
+                        f"⚠️ <i>Yatırım tavsiyesi değildir. Kendi analizinizi yapın.</i>"
                     )
                     send_telegram(msg)
                     active_positions[symbol] = {
