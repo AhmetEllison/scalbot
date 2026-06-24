@@ -13,15 +13,28 @@ COINS = [
     "KASUSDT", "AAVEUSDT", "ENAUSDT", "ETHUSDT", "SUIUSDT"
 ]
 
+# Aktif pozisyonlar: {symbol: {yon, giris, sl, tp1, tp2, tp1_hit}}
+active_positions = {}
 last_signal = {}
 
 def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         r = requests.post(url, data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=10)
-        print(f"Telegram: {r.status_code} - {r.text[:100]}")
+        print(f"Telegram: {r.status_code}")
     except Exception as e:
         print(f"Telegram hata: {e}")
+
+def get_price(symbol):
+    try:
+        url = "https://api.bitget.com/api/v2/spot/market/tickers"
+        r = requests.get(url, params={"symbol": symbol}, timeout=10)
+        data = r.json()
+        if data.get("code") == "00000":
+            return float(data["data"][0]["lastPr"])
+    except:
+        pass
+    return None
 
 def get_candles(symbol):
     try:
@@ -30,7 +43,6 @@ def get_candles(symbol):
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
         if data.get("code") != "00000":
-            print(f"API hata {symbol}: {data.get('msg')}")
             return None
         rows = data["data"]
         if not rows:
@@ -70,6 +82,9 @@ def atr(df, period=14):
     ], axis=1).max(axis=1)
     return tr.ewm(span=period, adjust=False).mean()
 
+def pct(giris, hedef):
+    return round(abs(hedef - giris) / giris * 100, 2)
+
 def check_signal(symbol, df):
     if df is None or len(df) < 30:
         return None
@@ -80,7 +95,7 @@ def check_signal(symbol, df):
     r = rsi(close, 7)
     vol_ma = vol.rolling(20).mean()
     atr14 = atr(df, 14)
-    i = len(df) - 2  # son kapanmış mum
+    i = len(df) - 2
     price = close.iloc[i]
     a = atr14.iloc[i]
     long_ok = e9.iloc[i] > e26.iloc[i] and price > e9.iloc[i] and r.iloc[i] > 50 and vol.iloc[i] > vol_ma.iloc[i]
@@ -91,13 +106,86 @@ def check_signal(symbol, df):
         return ("SHORT", price, round(price + a*1.5, 6), round(price - a*1.5, 6), round(price - a*3.0, 6), round(r.iloc[i], 1))
     return None
 
+def check_positions():
+    closed = []
+    for symbol, pos in active_positions.items():
+        price = get_price(symbol)
+        if not price:
+            continue
+        yon = pos["yon"]
+        giris = pos["giris"]
+        sl = pos["sl"]
+        tp1 = pos["tp1"]
+        tp2 = pos["tp2"]
+
+        if yon == "LONG":
+            if not pos["tp1_hit"] and price >= tp1:
+                pos["tp1_hit"] = True
+                send_telegram(
+                    f"🎯 <b>TP1 HIT!</b>\n"
+                    f"📌 {symbol} · LONG\n"
+                    f"💰 Giriş: {giris}\n"
+                    f"✅ TP1: {tp1} · <b>%{pct(giris, tp1)} kar</b> 📈"
+                )
+            elif price >= tp2:
+                send_telegram(
+                    f"🏆 <b>TP2 HIT!</b>\n"
+                    f"📌 {symbol} · LONG\n"
+                    f"💰 Giriş: {giris}\n"
+                    f"✅ TP2: {tp2} · <b>%{pct(giris, tp2)} kar</b> 🚀"
+                )
+                closed.append(symbol)
+            elif price <= sl:
+                send_telegram(
+                    f"🛑 <b>STOP HIT</b>\n"
+                    f"📌 {symbol} · LONG\n"
+                    f"💰 Giriş: {giris}\n"
+                    f"❌ SL: {sl} · <b>%{pct(giris, sl)} zarar</b>"
+                )
+                closed.append(symbol)
+
+        elif yon == "SHORT":
+            if not pos["tp1_hit"] and price <= tp1:
+                pos["tp1_hit"] = True
+                send_telegram(
+                    f"🎯 <b>TP1 HIT!</b>\n"
+                    f"📌 {symbol} · SHORT\n"
+                    f"💰 Giriş: {giris}\n"
+                    f"✅ TP1: {tp1} · <b>%{pct(giris, tp1)} kar</b> 📈"
+                )
+            elif price <= tp2:
+                send_telegram(
+                    f"🏆 <b>TP2 HIT!</b>\n"
+                    f"📌 {symbol} · SHORT\n"
+                    f"💰 Giriş: {giris}\n"
+                    f"✅ TP2: {tp2} · <b>%{pct(giris, tp2)} kar</b> 🚀"
+                )
+                closed.append(symbol)
+            elif price >= sl:
+                send_telegram(
+                    f"🛑 <b>STOP HIT</b>\n"
+                    f"📌 {symbol} · SHORT\n"
+                    f"💰 Giriş: {giris}\n"
+                    f"❌ SL: {sl} · <b>%{pct(giris, sl)} zarar</b>"
+                )
+                closed.append(symbol)
+
+    for s in closed:
+        active_positions.pop(s, None)
+
 def main():
     print("Bot başladı...")
     send_telegram("🤖 <b>Scalp Bot Başladı!</b>\nEMA9/26 + RSI7 + Volume sinyalleri geliyor.")
-    
+
     while True:
         try:
+            # Aktif pozisyonları kontrol et
+            check_positions()
+
+            # Yeni sinyal ara
             for symbol in COINS:
+                if symbol in active_positions:
+                    continue  # zaten açık pozisyon var
                 df = get_candles(symbol)
                 signal = check_signal(symbol, df)
                 if signal:
@@ -110,19 +198,24 @@ def main():
                     msg = (
                         f"{emoji} <b>{yon} SİNYALİ</b>\n"
                         f"📌 Coin: <b>{symbol}</b>\n"
-                        f"💰 Fiyat: {price}\n"
-                        f"🛑 SL: {sl}\n"
-                        f"🎯 TP1: {tp1}\n"
-                        f"🎯 TP2: {tp2}\n"
+                        f"💰 Giriş: {price}\n"
+                        f"🛑 SL: {sl} · %{pct(price, sl)}\n"
+                        f"🎯 TP1: {tp1} · %{pct(price, tp1)}\n"
+                        f"🎯 TP2: {tp2} · %{pct(price, tp2)}\n"
                         f"📊 RSI: {r}"
                     )
                     send_telegram(msg)
-                    print(f"Sinyal gönderildi: {symbol} {yon} @ {price}")
+                    active_positions[symbol] = {
+                        "yon": yon, "giris": price,
+                        "sl": sl, "tp1": tp1, "tp2": tp2, "tp1_hit": False
+                    }
+                    print(f"Sinyal: {symbol} {yon} @ {price}")
                 time.sleep(1)
+
         except Exception as e:
-            print(f"Döngü hata: {e}")
-        
-        print(f"Tur bitti, {CHECK_EVERY}sn bekleniyor...")
+            print(f"Hata: {e}")
+
+        print("Tur bitti, 60sn bekleniyor...")
         time.sleep(CHECK_EVERY)
 
 if __name__ == "__main__":
