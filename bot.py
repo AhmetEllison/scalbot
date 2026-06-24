@@ -35,8 +35,7 @@ def get_candles(symbol, limit=100):
         if data.get("code") != "00000":
             return None
         rows = data["data"]
-        df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "vol", "volCcy", "volCcyQuote", "confirm"])
-        df = df[df["confirm"] == "1"]  # sadece kapanmış mumlar
+        df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "vol", "volCcy", "volCcyQuote"][:len(rows[0])])
         df["close"] = df["close"].astype(float)
         df["vol"] = df["vol"].astype(float)
         df = df.iloc[::-1].reset_index(drop=True)  # eskiden yeniye sırala
