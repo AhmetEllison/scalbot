@@ -3,7 +3,7 @@ import time
 import pandas as pd
 
 # ===== AYARLAR =====
-TELEGRAM_TOKEN = "8806457521:AAEhKaB0a5dHTG-yecCwlivpew1PLMlAsTE"
+TELEGRAM_TOKEN = "8806457521:AAEhKaB0a5dHTG-yecCwlivpewlPLMlAsTE"
 CHAT_ID = "8478214929"
 CHECK_EVERY = 60
 
