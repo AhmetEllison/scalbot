@@ -15,7 +15,9 @@ COINS = [
 
 active_positions = {}
 last_signal = {}
-notified = {}  # tekrar mesaj önleme
+notified = {}
+gunluk = {"sinyal": 0, "tp1": 0, "tp2": 0, "sl": 0}
+rapor_tarihi = ""
 
 def send_telegram(msg):
     try:
@@ -84,7 +86,7 @@ def supertrend(df, period=10, multiplier=3.0):
     upper = hl2 + multiplier * a
     lower = hl2 - multiplier * a
     close = df["close"]
-    st = [True] * len(df)  # True = bullish
+    st = [True] * len(df)
     for i in range(1, len(df)):
         if close.iloc[i] > upper.iloc[i-1]:
             st[i] = True
@@ -148,6 +150,32 @@ def aktif_saat():
         saat -= 24
     return 8 <= saat <= 23
 
+def gunluk_rapor_gonder():
+    global rapor_tarihi, gunluk
+    bugun = datetime.utcnow().strftime("%Y-%m-%d")
+    saat = datetime.utcnow().hour + 3
+    if saat >= 24:
+        saat -= 24
+    if saat == 23 and rapor_tarihi != bugun:
+        rapor_tarihi = bugun
+        toplam = gunluk["tp1"] + gunluk["tp2"] + gunluk["sl"]
+        basari = round((gunluk["tp1"] + gunluk["tp2"]) / toplam * 100) if toplam > 0 else 0
+        msg = (
+            f"📊 <b>GÜNLÜK RAPOR</b>\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"📅 {bugun}\n"
+            f"📡 Toplam Sinyal: {gunluk['sinyal']}\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🎯 TP1 Hit: {gunluk['tp1']}\n"
+            f"🏆 TP2 Hit: {gunluk['tp2']}\n"
+            f"🛑 Stop Hit: {gunluk['sl']}\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"✅ Başarı Oranı: %{basari}\n"
+        )
+        send_telegram(msg)
+        # Günlük sıfırla
+        gunluk = {"sinyal": 0, "tp1": 0, "tp2": 0, "sl": 0}
+
 def check_signal(symbol, df):
     if df is None or len(df) < 210:
         return None
@@ -168,14 +196,14 @@ def check_signal(symbol, df):
     above_ema200 = price > e200.iloc[i]
 
     long_kosullar = [
-        e9.iloc[i] > e26.iloc[i],       # EMA9 > EMA26
-        price > e9.iloc[i],              # Fiyat EMA9 üstünde
-        r.iloc[i] > 50,                  # RSI > 50
-        vol.iloc[i] > vol_ma.iloc[i],    # Hacim ortalamanın üstünde
-        vol_oran > 1.5,                  # Hacim 1.5x üstünde
-        st_bullish,                      # SuperTrend bullish
-        above_ema200,                    # EMA200 üstünde
-        close.iloc[i] > close.iloc[i-1], # Son mum yeşil
+        e9.iloc[i] > e26.iloc[i],
+        price > e9.iloc[i],
+        r.iloc[i] > 50,
+        vol.iloc[i] > vol_ma.iloc[i],
+        vol_oran > 1.5,
+        st_bullish,
+        above_ema200,
+        close.iloc[i] > close.iloc[i-1],
     ]
     short_kosullar = [
         e9.iloc[i] < e26.iloc[i],
@@ -183,8 +211,8 @@ def check_signal(symbol, df):
         r.iloc[i] < 50,
         vol.iloc[i] > vol_ma.iloc[i],
         vol_oran > 1.5,
-        not st_bullish,                  # SuperTrend bearish
-        not above_ema200,                # EMA200 altında
+        not st_bullish,
+        not above_ema200,
         close.iloc[i] < close.iloc[i-1],
     ]
 
@@ -213,13 +241,16 @@ def check_positions():
             if not pos.get("tp1_hit") and not notified.get(f"{symbol}_tp1") and price >= tp1:
                 pos["tp1_hit"] = True
                 notified[f"{symbol}_tp1"] = True
+                gunluk["tp1"] += 1
                 send_telegram(f"🎯 <b>TP1 HIT!</b>\n📌 #{tag} · LONG\n💰 Giriş: {giris}\n✅ TP1: {tp1} · <b>%{pct(giris,tp1)} kar</b> 📈")
             elif not notified.get(f"{symbol}_tp2") and price >= tp2:
                 notified[f"{symbol}_tp2"] = True
+                gunluk["tp2"] += 1
                 send_telegram(f"🏆 <b>TP2 HIT!</b>\n📌 #{tag} · LONG\n💰 Giriş: {giris}\n✅ TP2: {tp2} · <b>%{pct(giris,tp2)} kar</b> 🚀")
                 closed.append(symbol)
             elif not notified.get(f"{symbol}_sl") and price <= sl:
                 notified[f"{symbol}_sl"] = True
+                gunluk["sl"] += 1
                 send_telegram(f"🛑 <b>STOP HIT</b>\n📌 #{tag} · LONG\n💰 Giriş: {giris}\n❌ SL: {sl} · <b>%{pct(giris,sl)} zarar</b>")
                 closed.append(symbol)
 
@@ -227,28 +258,32 @@ def check_positions():
             if not pos.get("tp1_hit") and not notified.get(f"{symbol}_tp1") and price <= tp1:
                 pos["tp1_hit"] = True
                 notified[f"{symbol}_tp1"] = True
+                gunluk["tp1"] += 1
                 send_telegram(f"🎯 <b>TP1 HIT!</b>\n📌 #{tag} · SHORT\n💰 Giriş: {giris}\n✅ TP1: {tp1} · <b>%{pct(giris,tp1)} kar</b> 📈")
             elif not notified.get(f"{symbol}_tp2") and price <= tp2:
                 notified[f"{symbol}_tp2"] = True
+                gunluk["tp2"] += 1
                 send_telegram(f"🏆 <b>TP2 HIT!</b>\n📌 #{tag} · SHORT\n💰 Giriş: {giris}\n✅ TP2: {tp2} · <b>%{pct(giris,tp2)} kar</b> 🚀")
                 closed.append(symbol)
             elif not notified.get(f"{symbol}_sl") and price >= sl:
                 notified[f"{symbol}_sl"] = True
+                gunluk["sl"] += 1
                 send_telegram(f"🛑 <b>STOP HIT</b>\n📌 #{tag} · SHORT\n💰 Giriş: {giris}\n❌ SL: {sl} · <b>%{pct(giris,sl)} zarar</b>")
                 closed.append(symbol)
 
     for s in closed:
         active_positions.pop(s, None)
-        # notified temizle
         for k in [f"{s}_tp1", f"{s}_tp2", f"{s}_sl"]:
             notified.pop(k, None)
 
 def main():
     print("Bot başladı...")
-    send_telegram("🤖 <b>Scalp Bot Başladı!</b>\nEMA9/26 + EMA200 + RSI + Volume + SuperTrend + BTC Filtresi + 15dk Teyit aktif.")
+    send_telegram("🤖 <b>Scalp Bot Başladı!</b>\nEMA9/26 + EMA200 + RSI + Volume + SuperTrend + BTC Filtresi + 15dk Teyit aktif.\nGünlük rapor 23:00'de gelecek.")
 
     while True:
         try:
+            gunluk_rapor_gonder()
+
             if not aktif_saat():
                 print("Aktif saat değil, bekleniyor...")
                 time.sleep(CHECK_EVERY)
@@ -270,7 +305,7 @@ def main():
                 if signal:
                     yon, price, sl, tp1, tp2, skor = signal
 
-                    if skor < 6:  # en az 6/8 koşul
+                    if skor < 6:
                         continue
                     if btc and btc != yon:
                         print(f"{symbol} {yon} BTC'ye aykırı, atlandı.")
@@ -296,10 +331,12 @@ def main():
                         f"🛑 SL: <code>{sl}</code>\n"
                         f"🎯 TP1: <code>{tp1}</code>\n"
                         f"🏆 TP2: <code>{tp2}</code>\n"
+                        f"⚡ Güç: {skor}/8\n"
                         f"━━━━━━━━━━━━━━\n"
                         f"⚠️ <i>Yatırım tavsiyesi değildir. Kendi analizinizi yapın.</i>"
                     )
                     send_telegram(msg)
+                    gunluk["sinyal"] += 1
                     active_positions[symbol] = {
                         "yon": yon, "giris": price,
                         "sl": sl, "tp1": tp1, "tp2": tp2, "tp1_hit": False
