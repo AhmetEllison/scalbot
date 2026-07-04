@@ -270,7 +270,7 @@ def main():
                 if signal:
                     yon, price, sl, tp1, tp2, skor = signal
 
-                    if skor < 7:  # en az 7/8 koşul - sadece çok güçlü
+                    if skor < 6:  # en az 6/8 koşul
                         continue
                     if btc and btc != yon:
                         print(f"{symbol} {yon} BTC'ye aykırı, atlandı.")
