@@ -38,7 +38,7 @@ def get_price(symbol):
         pass
     return None
 
-def get_candles(symbol, granularity="5min", limit=200):
+def get_candles(symbol, granularity="5min", limit=100):
     try:
         url = "https://api.bitget.com/api/v2/spot/market/candles"
         params = {"symbol": symbol, "granularity": granularity, "limit": str(limit)}
@@ -112,23 +112,6 @@ def btc_yon():
     except:
         return None
 
-def teyit_15dk(symbol, yon):
-    try:
-        df = get_candles(symbol, "15min", 50)
-        if df is None:
-            return False
-        close = df["close"]
-        e9 = ema(close, 9)
-        e26 = ema(close, 26)
-        r = rsi(close, 7)
-        i = len(df) - 2
-        if yon == "LONG":
-            return e9.iloc[i] > e26.iloc[i] and r.iloc[i] > 50
-        else:
-            return e9.iloc[i] < e26.iloc[i] and r.iloc[i] < 50
-    except:
-        return False
-
 def degisim_filtresi(symbol, yon):
     try:
         url = "https://api.bitget.com/api/v2/spot/market/tickers"
@@ -173,17 +156,17 @@ def gunluk_rapor_gonder():
             f"✅ Başarı Oranı: %{basari}\n"
         )
         send_telegram(msg)
-        # Günlük sıfırla
         gunluk = {"sinyal": 0, "tp1": 0, "tp2": 0, "sl": 0}
 
 def check_signal(symbol, df):
-    if df is None or len(df) < 210:
+    if df is None or len(df) < 30:
         return None
     close = df["close"]
     vol = df["vol"]
     e9 = ema(close, 9)
     e26 = ema(close, 26)
-    e200 = ema(close, 200)
+    e200_period = 200 if len(df) >= 200 else len(df) // 2
+    e200 = ema(close, e200_period)
     r = rsi(close, 7)
     vol_ma = vol.rolling(20).mean()
     atr14 = atr(df, 14)
@@ -191,7 +174,7 @@ def check_signal(symbol, df):
     i = len(df) - 2
     price = close.iloc[i]
     a = atr14.iloc[i]
-    vol_oran = round(vol.iloc[i] / vol_ma.iloc[i], 1)
+    vol_oran = round(vol.iloc[i] / (vol_ma.iloc[i] + 1e-10), 1)
     st_bullish = st[i]
     above_ema200 = price > e200.iloc[i]
 
@@ -216,12 +199,16 @@ def check_signal(symbol, df):
         close.iloc[i] < close.iloc[i-1],
     ]
 
+    skor_long = sum(long_kosullar)
+    skor_short = sum(short_kosullar)
+
+    # Debug: ilk 4 koşul sağlanıyor mu?
     if all(long_kosullar[:4]):
-        skor = sum(long_kosullar)
-        return ("LONG", price, round(price - a*1.5, 6), round(price + a*1.5, 6), round(price + a*3.0, 6), skor)
+        print(f"{symbol} LONG adayı | skor: {skor_long}/8 | koşullar: {long_kosullar}")
+        return ("LONG", price, round(price - a*1.5, 6), round(price + a*1.5, 6), round(price + a*3.0, 6), skor_long)
     if all(short_kosullar[:4]):
-        skor = sum(short_kosullar)
-        return ("SHORT", price, round(price + a*1.5, 6), round(price - a*1.5, 6), round(price - a*3.0, 6), skor)
+        print(f"{symbol} SHORT adayı | skor: {skor_short}/8 | koşullar: {short_kosullar}")
+        return ("SHORT", price, round(price + a*1.5, 6), round(price - a*1.5, 6), round(price - a*3.0, 6), skor_short)
     return None
 
 def check_positions():
@@ -253,7 +240,6 @@ def check_positions():
                 gunluk["sl"] += 1
                 send_telegram(f"🛑 <b>STOP HIT</b>\n📌 #{tag} · LONG\n💰 Giriş: {giris}\n❌ SL: {sl} · <b>%{pct(giris,sl)} zarar</b>")
                 closed.append(symbol)
-
         elif yon == "SHORT":
             if not pos.get("tp1_hit") and not notified.get(f"{symbol}_tp1") and price <= tp1:
                 pos["tp1_hit"] = True
@@ -278,7 +264,7 @@ def check_positions():
 
 def main():
     print("Bot başladı...")
-    send_telegram("🤖 <b>Scalp Bot Başladı!</b>\nEMA9/26 + EMA200 + RSI + Volume + SuperTrend + BTC Filtresi + 15dk Teyit aktif.\nGünlük rapor 23:00'de gelecek.")
+    send_telegram("🤖 <b>Scalp Bot Başladı!</b>\nEMA9/26 + EMA200 + RSI + Volume + SuperTrend + BTC Filtresi aktif.\nGünlük rapor 23:00'de gelecek.")
 
     while True:
         try:
@@ -299,19 +285,17 @@ def main():
                 if symbol == "BTCUSDT":
                     continue
 
-                df = get_candles(symbol, "5min", 200)
+                df = get_candles(symbol, "5min", 100)
                 signal = check_signal(symbol, df)
 
                 if signal:
                     yon, price, sl, tp1, tp2, skor = signal
 
-                    if skor < 6:
+                    if skor < 5:
+                        print(f"{symbol} skor düşük ({skor}/8), atlandı.")
                         continue
                     if btc and btc != yon:
-                        print(f"{symbol} {yon} BTC'ye aykırı, atlandı.")
-                        continue
-                    if not teyit_15dk(symbol, yon):
-                        print(f"{symbol} 15dk teyit yok, atlandı.")
+                        print(f"{symbol} {yon} BTC'ye ({btc}) aykırı, atlandı.")
                         continue
                     if not degisim_filtresi(symbol, yon):
                         print(f"{symbol} 24s filtresi geçemedi, atlandı.")
@@ -341,7 +325,7 @@ def main():
                         "yon": yon, "giris": price,
                         "sl": sl, "tp1": tp1, "tp2": tp2, "tp1_hit": False
                     }
-                    print(f"Sinyal: {symbol} {yon} @ {price} | Güç: {skor}/8")
+                    print(f"✅ Sinyal gönderildi: {symbol} {yon} @ {price} | Güç: {skor}/8")
 
                 time.sleep(1)
 
