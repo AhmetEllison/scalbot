@@ -232,10 +232,10 @@ def check_signal(symbol, df):
     skor_long = sum(long_kosullar)
     skor_short = sum(short_kosullar)
 
-    if all(long_kosullar[:4]) and skor_long >= 7:
-        return ("LONG", price, round(price - a*1.5, 6), round(price + a*1.5, 6), round(price + a*3.0, 6), skor_long)
-    if all(short_kosullar[:4]) and skor_short >= 7:
-        return ("SHORT", price, round(price + a*1.5, 6), round(price - a*1.5, 6), round(price - a*3.0, 6), skor_short)
+    if all(long_kosullar[:4]) and skor_long >= 8:
+        return ("LONG", price, round(price - a*2.0, 6), round(price + a*2.0, 6), round(price + a*4.0, 6), skor_long)
+    if all(short_kosullar[:4]) and skor_short >= 8:
+        return ("SHORT", price, round(price + a*2.0, 6), round(price - a*2.0, 6), round(price - a*4.0, 6), skor_short)
     return None
 
 # ─── POZİSYON TAKİP ─────────────────────────────────────
@@ -398,6 +398,9 @@ def main():
                         continue
 
                 # Tekrar sinyal önleme
+                if symbol in active_positions:
+                    time.sleep(1)
+                    continue
                 key = f"{symbol}_{yon}"
                 if last_signal.get(key) == round(price, 6):
                     time.sleep(1)
